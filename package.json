@@ -10,18 +10,19 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.9.0",
+    "firebase": "^10.13.2",
+    "firebase-admin": "^14.2.0",
+    "framer-motion": "^11.5.4",
+    "lucide-react": "^0.446.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.2",
-    "firebase": "^10.13.2",
-    "zustand": "^4.5.5",
     "react-hook-form": "^7.53.0",
-    "@hookform/resolvers": "^3.9.0",
-    "zod": "^3.23.8",
-    "framer-motion": "^11.5.4",
+    "react-router-dom": "^6.26.2",
     "recharts": "^2.12.7",
-    "lucide-react": "^0.446.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.5",

@@ -1,5 +1,6 @@
 import { AlertTriangle, BarChart3, CheckCircle2, CreditCard, Lightbulb, MessageSquareText, Plus, Sparkles, Target, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
 import { FormEvent, useMemo, useState } from 'react'
+import { getAuth } from 'firebase/auth'
 import { formatCurrency } from '@shared/utils/formatCurrency'
 import { useFinanceStore } from '@store/financeStore'
 
@@ -17,8 +18,9 @@ const pageContent = {
 } as const
 
 const aiConfig = {
-  configured: Boolean(import.meta.env.VITE_OPENAI_API_KEY),
+  configured: false,
   backendKeyName: 'OPENAI_API_KEY',
+  preparationMessage: 'Assistente em preparação. A IA será ativada assim que a conexão segura for concluída.',
 }
 
 export function WorkspacePage({ title, description, icon }: WorkspacePageProps) {
@@ -118,7 +120,7 @@ export function WorkspacePage({ title, description, icon }: WorkspacePageProps) 
     }
   }, [transactions])
 
-  const handleQuestionSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleQuestionSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
     if (!question.trim()) {
@@ -126,11 +128,47 @@ export function WorkspacePage({ title, description, icon }: WorkspacePageProps) 
     }
 
     if (!aiConfig.configured) {
-      setAssistantResponse('O assistente inteligente do COFRE IA será conectado na próxima etapa. Enquanto isso, os dados financeiros do mês continuam disponíveis para análise manual e o painel já mostra alertas e sugestões baseados no seu histórico real.')
+      setAssistantResponse(aiConfig.preparationMessage)
       return
     }
 
-    setAssistantResponse('O assistente inteligente foi preparado para a próxima etapa. Quando a chave privada for configurada no backend, esta área poderá responder perguntas como “onde estou gastando mais?” com base nos dados reais do usuário.')
+    try {
+      const firebaseAuth = getAuth()
+      const token = firebaseAuth.currentUser ? await firebaseAuth.currentUser.getIdToken() : null
+
+      if (!token) {
+        setAssistantResponse(aiConfig.preparationMessage)
+        return
+      }
+
+      const response = await fetch('/api/finance-assistant', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          question,
+          context: {
+            entries: insights.entries,
+            expenses: insights.expenses,
+            balance: insights.balance,
+            topCategory: insights.topCategory,
+          },
+        }),
+      })
+
+      const payload = await response.json() as { message?: string; answer?: string }
+
+      if (!response.ok) {
+        setAssistantResponse(payload.message ?? aiConfig.preparationMessage)
+        return
+      }
+
+      setAssistantResponse(payload.answer ?? aiConfig.preparationMessage)
+    } catch {
+      setAssistantResponse(aiConfig.preparationMessage)
+    }
   }
 
   const categoryColor = insights.topCategory ? 'text-slate-900' : 'text-slate-500'
@@ -208,6 +246,7 @@ export function WorkspacePage({ title, description, icon }: WorkspacePageProps) 
         <form onSubmit={handleQuestionSubmit} className="mt-5 space-y-4">
           <textarea
             value={question}
+            maxLength={250}
             onChange={(event) => setQuestion(event.target.value)}
             rows={4}
             placeholder="Ex.: Onde estou gastando mais? O que posso melhorar no meu orçamento?"
@@ -246,6 +285,20 @@ export function WorkspacePage({ title, description, icon }: WorkspacePageProps) 
             {insights.topCategory ? `${insights.topCategory.name} · ${formatCurrency(insights.topCategory.total)}` : 'Ainda não há dados'}
           </p>
         </div>
+      </section>
+
+      <section className="mt-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600"><MessageSquareText size={18} /></div>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-950">Atendimento pelo WhatsApp</h3>
+            <p className="text-sm text-slate-500">Ativação futura com conta oficial do WhatsApp Business e número comercial.</p>
+          </div>
+        </div>
+
+        <p className="mt-4 text-sm leading-6 text-slate-600">
+          Este canal será ativado quando houver uma conta oficial do WhatsApp Business e um número comercial validado. Enquanto isso, o atendimento não será disparado e nenhuma mensagem será enviada automaticamente.
+        </p>
       </section>
     </div>
   )
