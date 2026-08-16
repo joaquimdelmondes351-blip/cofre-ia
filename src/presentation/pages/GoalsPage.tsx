@@ -94,7 +94,8 @@ function GoalCard({ goal, onContribute }: { goal: Goal; onContribute: () => void
   const progress = goal.target > 0 ? Math.round((goal.saved / goal.target) * 100) : 0
   const remaining = Math.max(goal.target - goal.saved, 0)
   const deadlineInfo = getGoalDeadlineInfo(goal.deadline)
-  const monthlyNeed = deadlineInfo && remaining > 0 ? remaining / Math.max(deadlineInfo.monthsRemaining, 1) : 0
+  const monthsRemaining = deadlineInfo ? Math.max(deadlineInfo.monthsRemaining, 1) : null
+  const monthlyNeed = monthsRemaining && remaining > 0 ? remaining / monthsRemaining : null
   const isExpired = Boolean(deadlineInfo?.isExpired)
 
   return (
@@ -109,12 +110,14 @@ function GoalCard({ goal, onContribute }: { goal: Goal; onContribute: () => void
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-600 transition-all" style={{ width: `${Math.min(progress, 100)}%` }} /></div>
 
       <p className="mt-4 text-xs leading-5 text-slate-600">
-        {remaining > 0
-          ? `Faltam ${formatCurrency(remaining)}. Para atingir até ${goal.deadline}, guarde ${formatCurrency(monthlyNeed)} por mês.`
-          : `Meta concluída! Você já alcançou ${formatCurrency(goal.target)}.`}
+        {remaining > 0 && deadlineInfo
+          ? `Faltam ${formatCurrency(remaining)}. Para atingir até ${goal.deadline}, guarde ${formatCurrency(monthlyNeed ?? 0)} por mês.`
+          : remaining > 0 && !deadlineInfo
+            ? 'Informe o prazo no formato "dezembro 2026".'
+            : `Meta concluída! Você já alcançou ${formatCurrency(goal.target)}.`}
       </p>
 
-      {isExpired && remaining > 0 && (
+      {isExpired && remaining > 0 && deadlineInfo && (
         <p className="mt-2 text-xs font-semibold text-rose-600">Prazo já passou.</p>
       )}
 
@@ -129,7 +132,8 @@ function getGoalDeadlineInfo(deadline: string) {
     'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
   ]
 
-  const match = deadline.trim().match(/([a-zA-ZÀ-ú]+)\s+de\s+(\d{4})/i)
+  const normalized = deadline.trim().toLowerCase().replace(/\s+de\s+/g, ' ')
+  const match = normalized.match(/^([a-zá-ú]+)\s+(\d{4})$/i)
 
   if (!match) {
     return null
@@ -148,7 +152,8 @@ function getGoalDeadlineInfo(deadline: string) {
   const currentMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
   const monthsRemaining = Math.max(
     (targetDate.getFullYear() - currentMonth.getFullYear()) * 12 +
-      (targetDate.getMonth() - currentMonth.getMonth()),
+      (targetDate.getMonth() - currentMonth.getMonth()) +
+      1,
     1,
   )
 
