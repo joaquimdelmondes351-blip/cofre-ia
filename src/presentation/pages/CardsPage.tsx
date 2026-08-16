@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react'
 import { CreditCard, Plus } from 'lucide-react'
 import { formatCurrency } from '@shared/utils/formatCurrency'
+import { getCardBillsById, getCardUsageDetails } from '@shared/utils/cardBilling'
 import { Card, useCardsStore } from '@store/cardsStore'
 import { useFinanceStore } from '@store/financeStore'
 
@@ -11,19 +12,7 @@ export function CardsPage() {
   const transactions = useFinanceStore((state) => state.transactions)
   const [showForm, setShowForm] = useState(false)
 
-  const cardBills = useMemo(() => {
-    const billMap = new Map<string, number>()
-
-    transactions.forEach((transaction) => {
-      if (transaction.type !== 'expense' || !transaction.cardId) {
-        return
-      }
-
-      billMap.set(transaction.cardId, (billMap.get(transaction.cardId) ?? 0) + transaction.amount)
-    })
-
-    return billMap
-  }, [transactions])
+  const cardBills = useMemo(() => getCardBillsById(transactions), [transactions])
 
   async function handleAddCard(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -73,8 +62,7 @@ export function CardsPage() {
 }
 
 function CardItem({ card, bill }: { card: Card; bill: number }) {
-  const percentage = card.limit > 0 ? Math.min(Math.round((bill / card.limit) * 100), 100) : 0
-  const available = Math.max(card.limit - bill, 0)
+  const { percentage, available } = getCardUsageDetails(card.limit, bill)
   const closingInfo = getClosingInfo(card.closing)
   const isWarning = percentage >= 70 && percentage < 90
   const isCritical = percentage >= 90
