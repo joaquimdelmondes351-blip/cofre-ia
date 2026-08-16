@@ -1,19 +1,110 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { addDoc, collection, doc, onSnapshot, orderBy, query, updateDoc, Unsubscribe } from 'firebase/firestore'
+import { db } from '@core/infra/firebase/firestore'
+import { useAuthStore } from '@store/authStore'
 
-export type Goal = { id: number; name: string; target: number; saved: number; deadline: string }
+export type Goal = {
+  id: string
+  name: string
+  target: number
+  saved: number
+  deadline: string
+}
 
 type GoalsState = {
   goals: Goal[]
-  addGoal: (goal: Omit<Goal, 'id' | 'saved'>) => void
-  addContribution: (id: number, amount: number) => void
+  loading: boolean
+  subscribeToUserGoals: (uid: string | null) => () => void
+  addGoal: (goal: Omit<Goal, 'id' | 'saved'>) => Promise<void>
+  addContribution: (id: string, amount: number) => Promise<void>
+  clearGoals: () => void
 }
 
-export const useGoalsStore = create<GoalsState>()(persist(
-  (set) => ({
-    goals: [{ id: 1, name: 'Reserva de emergência', target: 10000, saved: 4200, deadline: 'Dezembro de 2026' }],
-    addGoal: (goal) => set((state) => ({ goals: [...state.goals, { ...goal, id: Date.now(), saved: 0 }] })),
-    addContribution: (id, amount) => set((state) => ({ goals: state.goals.map((goal) => goal.id === id ? { ...goal, saved: Math.min(goal.target, goal.saved + amount) } : goal) })),
-  }),
-  { name: 'cofre-ia-goals' },
-))
+let goalsUnsubscribe: Unsubscribe | null = null
+
+export const useGoalsStore = create<GoalsState>((set) => ({
+  goals: [],
+  loading: false,
+  subscribeToUserGoals: (uid) => {
+    if (goalsUnsubscribe) {
+      goalsUnsubscribe()
+      goalsUnsubscribe = null
+    }
+
+    if (!uid) {
+      set({ goals: [], loading: false })
+      return () => undefined
+    }
+
+    set({ loading: true })
+
+    const q = query(collection(db, 'users', uid, 'goals'), orderBy('createdAt', 'desc'))
+
+    goalsUnsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const goals = snapshot.docs.map((document) => {
+          const data = document.data() as {
+            name: string
+            target: number
+            saved: number
+            deadline: string
+          }
+
+          return {
+            id: document.id,
+            name: data.name,
+            target: Number(data.target),
+            saved: Number(data.saved),
+            deadline: data.deadline,
+          }
+        })
+
+        set({ goals, loading: false })
+      },
+      () => {
+        set({ goals: [], loading: false })
+      },
+    )
+
+    return () => {
+      if (goalsUnsubscribe) {
+        goalsUnsubscribe()
+        goalsUnsubscribe = null
+      }
+    }
+  },
+  addGoal: async (goal) => {
+    const uid = useAuthStore.getState().user?.id
+
+    if (!uid) {
+      return
+    }
+
+    await addDoc(collection(db, 'users', uid, 'goals'), {
+      name: goal.name,
+      target: Number(goal.target),
+      saved: 0,
+      deadline: goal.deadline,
+      createdAt: new Date(),
+    })
+  },
+  addContribution: async (id, amount) => {
+    const uid = useAuthStore.getState().user?.id
+    const currentGoal = useGoalsStore.getState().goals.find((goal) => goal.id === id)
+
+    if (!uid || !currentGoal) {
+      return
+    }
+
+    const nextSaved = Math.min(currentGoal.target, currentGoal.saved + amount)
+
+    await updateDoc(doc(db, 'users', uid, 'goals', id), {
+      saved: nextSaved,
+      updatedAt: new Date(),
+    })
+  },
+  clearGoals: () => {
+    set({ goals: [], loading: false })
+  },
+}))

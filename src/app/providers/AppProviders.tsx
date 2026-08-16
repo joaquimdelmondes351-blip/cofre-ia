@@ -3,7 +3,9 @@ import { BrowserRouter } from 'react-router-dom'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '@core/infra/firebase/auth'
 import { useAuthStore } from '@store/authStore'
+import { useCardsStore } from '@store/cardsStore'
 import { useFinanceStore } from '@store/financeStore'
+import { useGoalsStore } from '@store/goalsStore'
 
 interface AppProvidersProps {
   children: ReactNode
@@ -19,6 +21,8 @@ export function AppProviders({ children }: AppProvidersProps) {
       if (!firebaseUser) {
         useAuthStore.getState().clear()
         useFinanceStore.getState().subscribeToUserTransactions(null)
+        useCardsStore.getState().subscribeToUserCards(null)
+        useGoalsStore.getState().subscribeToUserGoals(null)
         return
       }
 
@@ -31,6 +35,8 @@ export function AppProviders({ children }: AppProvidersProps) {
 
       useAuthStore.getState().setUser(user)
       useFinanceStore.getState().subscribeToUserTransactions(firebaseUser.uid)
+      useCardsStore.getState().subscribeToUserCards(firebaseUser.uid)
+      useGoalsStore.getState().subscribeToUserGoals(firebaseUser.uid)
     })
 
     return () => unsubscribe()
