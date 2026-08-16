@@ -1,13 +1,29 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useMemo, useState } from 'react'
 import { CreditCard, Plus } from 'lucide-react'
 import { formatCurrency } from '@shared/utils/formatCurrency'
 import { Card, useCardsStore } from '@store/cardsStore'
+import { useFinanceStore } from '@store/financeStore'
 
 export function CardsPage() {
   const cards = useCardsStore((state) => state.cards)
   const loading = useCardsStore((state) => state.loading)
   const addCard = useCardsStore((state) => state.addCard)
+  const transactions = useFinanceStore((state) => state.transactions)
   const [showForm, setShowForm] = useState(false)
+
+  const cardBills = useMemo(() => {
+    const billMap = new Map<string, number>()
+
+    transactions.forEach((transaction) => {
+      if (transaction.type !== 'expense' || !transaction.cardId) {
+        return
+      }
+
+      billMap.set(transaction.cardId, (billMap.get(transaction.cardId) ?? 0) + transaction.amount)
+    })
+
+    return billMap
+  }, [transactions])
 
   async function handleAddCard(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -50,15 +66,15 @@ export function CardsPage() {
       ) : cards.length === 0 ? (
         <div className="mt-7 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">Nenhum cartão cadastrado ainda.</div>
       ) : (
-        <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{cards.map((card) => <CardItem key={card.id} card={card} />)}</div>
+        <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{cards.map((card) => <CardItem key={card.id} card={card} bill={cardBills.get(card.id) ?? 0} />)}</div>
       )}
     </div>
   )
 }
 
-function CardItem({ card }: { card: Card }) {
-  const percentage = card.limit > 0 ? Math.min(Math.round((card.bill / card.limit) * 100), 100) : 0
-  const available = Math.max(card.limit - card.bill, 0)
+function CardItem({ card, bill }: { card: Card; bill: number }) {
+  const percentage = card.limit > 0 ? Math.min(Math.round((bill / card.limit) * 100), 100) : 0
+  const available = Math.max(card.limit - bill, 0)
   const closingInfo = getClosingInfo(card.closing)
   const isWarning = percentage >= 70 && percentage < 90
   const isCritical = percentage >= 90
@@ -95,7 +111,7 @@ function CardItem({ card }: { card: Card }) {
           <span>Fatura atual</span>
           <span>{percentage}% usado</span>
         </div>
-        <strong className="mt-2 block text-2xl font-semibold text-white">{formatCurrency(card.bill)}</strong>
+        <strong className="mt-2 block text-2xl font-semibold text-white">{formatCurrency(bill)}</strong>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-700">
           <div className={`h-full rounded-full ${progressBarColor}`} style={{ width: `${Math.min(percentage, 100)}%` }} />
         </div>

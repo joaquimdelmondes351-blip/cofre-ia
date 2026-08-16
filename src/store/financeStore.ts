@@ -13,6 +13,8 @@ export type Transaction = {
   type: TransactionType
   date: string
   dateValue: string
+  paymentMethod?: 'cash' | 'card'
+  cardId?: string | null
 }
 
 type AddTransactionInput = {
@@ -21,6 +23,8 @@ type AddTransactionInput = {
   amount: number
   type: TransactionType
   date?: string | Date
+  paymentMethod?: 'cash' | 'card'
+  cardId?: string | null
 }
 
 type FinanceState = {
@@ -79,6 +83,8 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             type: TransactionType
             date?: string | { toDate: () => Date } | Date | number | null
             createdAt?: { toDate: () => Date } | Date | number | null
+            paymentMethod?: 'cash' | 'card'
+            cardId?: string | null
           }
 
           const createdAt = data.createdAt && typeof data.createdAt === 'object' && 'toDate' in data.createdAt
@@ -109,6 +115,8 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             type: data.type,
             date: formatDate(documentDate),
             dateValue,
+            paymentMethod: data.paymentMethod ?? 'cash',
+            cardId: data.cardId ?? null,
           }
         })
 
@@ -147,6 +155,8 @@ export const useFinanceStore = create<FinanceState>((set) => ({
       type: transaction.type,
       date: normalizedDate.toISOString(),
       dateValue: normalizedDate.toISOString(),
+      paymentMethod: transaction.paymentMethod ?? 'cash',
+      cardId: transaction.type === 'expense' && transaction.paymentMethod === 'card' ? transaction.cardId ?? null : null,
       createdAt: new Date(),
     })
   },
