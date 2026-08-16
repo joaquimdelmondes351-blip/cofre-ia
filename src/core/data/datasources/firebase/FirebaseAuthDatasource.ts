@@ -1,7 +1,8 @@
 import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
-  onAuthStateChanged,
   User as FirebaseUser,
 } from 'firebase/auth'
 import { auth } from '@core/infra/firebase/auth'
@@ -13,6 +14,11 @@ import { auth } from '@core/infra/firebase/auth'
 export class FirebaseAuthDatasource {
   async signIn(email: string, password: string) {
     const credential = await signInWithEmailAndPassword(auth, email, password)
+    return credential.user
+  }
+
+  async signUp(email: string, password: string) {
+    const credential = await createUserWithEmailAndPassword(auth, email, password)
     return credential.user
   }
 

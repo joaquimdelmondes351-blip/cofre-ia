@@ -1,10 +1,12 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, Unsubscribe } from 'firebase/firestore'
+import { db } from '@core/infra/firebase/firestore'
+import { useAuthStore } from '@store/authStore'
 
 export type TransactionType = 'income' | 'expense'
 
 export type Transaction = {
-  id: number
+  id: string
   name: string
   category: string
   amount: number
@@ -12,29 +14,119 @@ export type Transaction = {
   date: string
 }
 
-const initialTransactions: Transaction[] = [
-  { id: 1, name: 'Salário', category: 'Receitas', amount: 5800, type: 'income', date: 'Hoje' },
-  { id: 2, name: 'Supermercado', category: 'Alimentação', amount: 284.9, type: 'expense', date: 'Hoje' },
-  { id: 3, name: 'Aluguel', category: 'Moradia', amount: 1450, type: 'expense', date: '12 ago' },
-  { id: 4, name: 'Freelance', category: 'Receitas', amount: 850, type: 'income', date: '10 ago' },
-  { id: 5, name: 'Assinaturas', category: 'Serviços', amount: 79.9, type: 'expense', date: '08 ago' },
-]
-
 type FinanceState = {
   transactions: Transaction[]
-  addTransaction: (transaction: Omit<Transaction, 'id' | 'date'>) => void
-  removeTransaction: (id: number) => void
+  loading: boolean
+  subscribeToUserTransactions: (uid: string | null) => () => void
+  addTransaction: (transaction: Omit<Transaction, 'id' | 'date'>) => Promise<void>
+  removeTransaction: (id: string) => Promise<void>
+  clearTransactions: () => void
 }
 
-export const useFinanceStore = create<FinanceState>()(persist(
-  (set) => ({
-    transactions: initialTransactions,
-    addTransaction: (transaction) => set((state) => ({
-      transactions: [{ ...transaction, id: Date.now(), date: 'Agora' }, ...state.transactions],
-    })),
-    removeTransaction: (id) => set((state) => ({
-      transactions: state.transactions.filter((transaction) => transaction.id !== id),
-    })),
-  }),
-  { name: 'cofre-ia-finance' },
-))
+const formatDate = (value: Date | number | null | undefined) => {
+  if (!value) {
+    return 'Agora'
+  }
+
+  const date = value instanceof Date ? value : new Date(value)
+  const today = new Date()
+  const isToday = date.toDateString() === today.toDateString()
+
+  if (isToday) {
+    return 'Hoje'
+  }
+
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+}
+
+let transactionsUnsubscribe: Unsubscribe | null = null
+
+export const useFinanceStore = create<FinanceState>((set) => ({
+  transactions: [],
+  loading: false,
+  subscribeToUserTransactions: (uid) => {
+    if (transactionsUnsubscribe) {
+      transactionsUnsubscribe()
+      transactionsUnsubscribe = null
+    }
+
+    if (!uid) {
+      set({ transactions: [], loading: false })
+      return () => undefined
+    }
+
+    set({ loading: true })
+
+    const q = query(collection(db, 'users', uid, 'transactions'), orderBy('createdAt', 'desc'))
+
+    transactionsUnsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const transactions = snapshot.docs.map((document) => {
+          const data = document.data() as {
+            name: string
+            category: string
+            amount: number
+            type: TransactionType
+            createdAt?: { toDate: () => Date } | Date | number | null
+          }
+
+          const createdAt = data.createdAt && typeof data.createdAt === 'object' && 'toDate' in data.createdAt
+            ? data.createdAt.toDate()
+            : data.createdAt instanceof Date
+              ? data.createdAt
+              : typeof data.createdAt === 'number'
+                ? new Date(data.createdAt)
+                : new Date()
+
+          return {
+            id: document.id,
+            name: data.name,
+            category: data.category,
+            amount: Number(data.amount),
+            type: data.type,
+            date: formatDate(createdAt),
+          }
+        })
+
+        set({ transactions, loading: false })
+      },
+      (error) => {
+        console.error('Erro ao carregar transações do Firestore:', error)
+        set({ transactions: [], loading: false })
+      },
+    )
+
+    return () => {
+      if (transactionsUnsubscribe) {
+        transactionsUnsubscribe()
+        transactionsUnsubscribe = null
+      }
+    }
+  },
+  addTransaction: async (transaction) => {
+    const uid = useAuthStore.getState().user?.id
+
+    if (!uid) {
+      return
+    }
+
+    await addDoc(collection(db, 'users', uid, 'transactions'), {
+      ...transaction,
+      amount: Number(transaction.amount),
+      createdAt: new Date(),
+    })
+  },
+  removeTransaction: async (id) => {
+    const uid = useAuthStore.getState().user?.id
+
+    if (!uid) {
+      return
+    }
+
+    await deleteDoc(doc(db, 'users', uid, 'transactions', id))
+  },
+  clearTransactions: () => {
+    set({ transactions: [], loading: false })
+  },
+}))

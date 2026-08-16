@@ -14,6 +14,11 @@ export class AuthRepository implements IAuthRepository {
     return this.mapToUser(firebaseUser)
   }
 
+  async signup(email: string, password: string): Promise<User> {
+    const firebaseUser = await this.datasource.signUp(email, password)
+    return this.mapToUser(firebaseUser)
+  }
+
   async logout(): Promise<void> {
     await this.datasource.signOut()
   }
