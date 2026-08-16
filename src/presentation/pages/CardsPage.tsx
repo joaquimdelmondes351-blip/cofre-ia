@@ -57,21 +57,101 @@ export function CardsPage() {
 }
 
 function CardItem({ card }: { card: Card }) {
-  const percentage = card.limit > 0 ? Math.round((card.bill / card.limit) * 100) : 0
-  const alert = percentage >= 70
+  const percentage = card.limit > 0 ? Math.min(Math.round((card.bill / card.limit) * 100), 100) : 0
+  const available = Math.max(card.limit - card.bill, 0)
+  const closingInfo = getClosingInfo(card.closing)
+  const isWarning = percentage >= 70 && percentage < 90
+  const isCritical = percentage >= 90
+  const isClosingSoon = Boolean(closingInfo?.isClosingSoon)
+
+  const progressBarColor = isCritical ? 'bg-rose-400' : isWarning ? 'bg-amber-400' : 'bg-emerald-400'
+  const statusText = isCritical ? 'Uso crítico do limite' : isWarning ? 'Uso elevado do limite' : 'Dentro do limite'
 
   return (
-    <section className="overflow-hidden rounded-2xl bg-slate-950 p-5 text-white shadow-sm">
+    <section className="overflow-hidden rounded-2xl bg-slate-950 p-5 text-white shadow-sm ring-1 ring-slate-800">
       <div className="flex items-center justify-between">
-        <CreditCard className="text-emerald-400" size={24} />
-        <span className="text-xs text-slate-400">Fecha em {card.closing}</span>
+        <div className="flex items-center gap-2">
+          <CreditCard className="text-emerald-400" size={24} />
+          <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-emerald-300">Cartão</span>
+        </div>
+        <span className="text-xs text-slate-400">{closingInfo ? `Fecha em ${closingInfo.day}` : `Fechamento ${card.closing}`}</span>
       </div>
-      <h2 className="mt-9 text-lg font-semibold">{card.name}</h2>
-      <p className="mt-1 text-sm text-slate-400">Fatura atual</p>
-      <strong className="mt-1 block text-2xl">{formatCurrency(card.bill)}</strong>
-      <div className="mt-6 flex justify-between text-xs text-slate-400"><span>{percentage}% usado</span><span>Limite {formatCurrency(card.limit)}</span></div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-700"><div className={`h-full rounded-full ${alert ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{ width: `${Math.min(percentage, 100)}%` }} /></div>
-      {alert && <p className="mt-4 text-xs leading-5 text-amber-300">Atenção: seu cartão já passou de 70% do limite.</p>}
+
+      <h2 className="mt-8 text-lg font-semibold text-white">{card.name}</h2>
+
+      <div className="mt-6 grid grid-cols-2 gap-3">
+        <div className="rounded-xl bg-slate-900/80 p-3">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Limite</p>
+          <strong className="mt-2 block text-base font-semibold text-white">{formatCurrency(card.limit)}</strong>
+        </div>
+        <div className="rounded-xl bg-slate-900/80 p-3">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Disponível</p>
+          <strong className="mt-2 block text-base font-semibold text-emerald-300">{formatCurrency(available)}</strong>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+        <div className="flex items-center justify-between text-xs text-slate-300">
+          <span>Fatura atual</span>
+          <span>{percentage}% usado</span>
+        </div>
+        <strong className="mt-2 block text-2xl font-semibold text-white">{formatCurrency(card.bill)}</strong>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-700">
+          <div className={`h-full rounded-full ${progressBarColor}`} style={{ width: `${Math.min(percentage, 100)}%` }} />
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs">
+        <span className={isCritical ? 'text-rose-300' : isWarning ? 'text-amber-300' : 'text-emerald-300'}>{statusText}</span>
+        <span className="text-slate-400">{closingInfo && closingInfo.diffDays !== null ? `Fechamento ${closingInfo.label}` : card.closing}</span>
+      </div>
+
+      {isWarning && (
+        <p className="mt-3 text-xs leading-5 text-amber-300">Atenção: você já usou 70% do limite do cartão.</p>
+      )}
+
+      {isCritical && (
+        <p className="mt-3 text-xs leading-5 text-rose-300">Alerta: você está em 90% ou mais do limite e precisa controlar o gasto.</p>
+      )}
+
+      {isClosingSoon && (
+        <p className="mt-3 text-xs leading-5 text-sky-300">Fechamento próximo: a fatura vence em poucos dias.</p>
+      )}
     </section>
   )
+}
+
+function getClosingInfo(closing: string) {
+  const match = closing.trim().match(/(\d{1,2})/)
+
+  if (!match) {
+    return null
+  }
+
+  const dayNumber = Number(match[1])
+
+  if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 31) {
+    return null
+  }
+
+  const today = new Date()
+  const currentYear = today.getFullYear()
+  const currentMonth = today.getMonth()
+  const targetDate = new Date(currentYear, currentMonth, dayNumber)
+
+  let diffDays = Math.ceil((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) {
+    const nextMonthDate = new Date(currentYear, currentMonth + 1, dayNumber)
+    diffDays = Math.ceil((nextMonthDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  }
+
+  const isClosingSoon = diffDays >= 0 && diffDays <= 5
+
+  return {
+    day: dayNumber,
+    diffDays,
+    isClosingSoon,
+    label: diffDays === 0 ? 'hoje' : diffDays === 1 ? 'amanhã' : `em ${diffDays} dias`,
+  }
 }
