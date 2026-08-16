@@ -1,14 +1,54 @@
 import type { Transaction } from '@store/financeStore'
 
+export function resolveCardId(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    return normalized ? normalized : null
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+
+    if (typeof record.id === 'string') {
+      const normalized = record.id.trim()
+      if (normalized) {
+        return normalized
+      }
+    }
+
+    if (typeof record.cardId === 'string') {
+      const normalized = record.cardId.trim()
+      if (normalized) {
+        return normalized
+      }
+    }
+
+    if (typeof record.card_id === 'string') {
+      const normalized = record.card_id.trim()
+      if (normalized) {
+        return normalized
+      }
+    }
+  }
+
+  return null
+}
+
 export function getCardBillsById(transactions: Transaction[]) {
   const billMap = new Map<string, number>()
 
   transactions.forEach((transaction) => {
-    if (transaction.type !== 'expense' || !transaction.cardId) {
+    if (transaction.type !== 'expense') {
       return
     }
 
-    billMap.set(transaction.cardId, (billMap.get(transaction.cardId) ?? 0) + transaction.amount)
+    const normalizedCardId = resolveCardId((transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).cardId ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card_id ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card)
+
+    if (!normalizedCardId) {
+      return
+    }
+
+    billMap.set(normalizedCardId, (billMap.get(normalizedCardId) ?? 0) + transaction.amount)
   })
 
   return billMap

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, Unsubscribe } from 'firebase/firestore'
 import { db } from '@core/infra/firebase/firestore'
+import { resolveCardId } from '@shared/utils/cardBilling'
 import { useAuthStore } from '@store/authStore'
 
 export type TransactionType = 'income' | 'expense'
@@ -84,7 +85,9 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             date?: string | { toDate: () => Date } | Date | number | null
             createdAt?: { toDate: () => Date } | Date | number | null
             paymentMethod?: 'cash' | 'card'
-            cardId?: string | null
+            cardId?: unknown
+            card_id?: unknown
+            card?: unknown
           }
 
           const createdAt = data.createdAt && typeof data.createdAt === 'object' && 'toDate' in data.createdAt
@@ -116,7 +119,7 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             date: formatDate(documentDate),
             dateValue,
             paymentMethod: data.paymentMethod ?? 'cash',
-            cardId: data.cardId ?? null,
+            cardId: resolveCardId(data.cardId ?? data.card_id ?? data.card),
           }
         })
 
