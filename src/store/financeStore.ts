@@ -12,6 +12,7 @@ export type Transaction = {
   amount: number
   type: TransactionType
   date: string
+  dateValue: string
 }
 
 type AddTransactionInput = {
@@ -98,6 +99,8 @@ export const useFinanceStore = create<FinanceState>((set) => ({
                   ? new Date(data.date)
                   : createdAt
 
+          const dateValue = documentDate instanceof Date ? documentDate.toISOString() : new Date().toISOString()
+
           return {
             id: document.id,
             name: data.name,
@@ -105,6 +108,7 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             amount: Number(data.amount),
             type: data.type,
             date: formatDate(documentDate),
+            dateValue,
           }
         })
 
@@ -142,6 +146,7 @@ export const useFinanceStore = create<FinanceState>((set) => ({
       amount: Number(transaction.amount),
       type: transaction.type,
       date: normalizedDate.toISOString(),
+      dateValue: normalizedDate.toISOString(),
       createdAt: new Date(),
     })
   },
