@@ -92,6 +92,10 @@ export function GoalsPage() {
 
 function GoalCard({ goal, onContribute }: { goal: Goal; onContribute: () => void }) {
   const progress = goal.target > 0 ? Math.round((goal.saved / goal.target) * 100) : 0
+  const remaining = Math.max(goal.target - goal.saved, 0)
+  const deadlineInfo = getGoalDeadlineInfo(goal.deadline)
+  const monthlyNeed = deadlineInfo && remaining > 0 ? remaining / Math.max(deadlineInfo.monthsRemaining, 1) : 0
+  const isExpired = Boolean(deadlineInfo?.isExpired)
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -103,7 +107,53 @@ function GoalCard({ goal, onContribute }: { goal: Goal; onContribute: () => void
       <p className="mt-1 text-sm text-slate-500">Prazo: {goal.deadline}</p>
       <div className="mt-5 flex items-end justify-between"><strong className="text-xl text-slate-950">{formatCurrency(goal.saved)}</strong><span className="text-sm text-slate-500">de {formatCurrency(goal.target)}</span></div>
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-600 transition-all" style={{ width: `${Math.min(progress, 100)}%` }} /></div>
+
+      <p className="mt-4 text-xs leading-5 text-slate-600">
+        {remaining > 0
+          ? `Faltam ${formatCurrency(remaining)}. Para atingir até ${goal.deadline}, guarde ${formatCurrency(monthlyNeed)} por mês.`
+          : `Meta concluída! Você já alcançou ${formatCurrency(goal.target)}.`}
+      </p>
+
+      {isExpired && remaining > 0 && (
+        <p className="mt-2 text-xs font-semibold text-rose-600">Prazo já passou.</p>
+      )}
+
       <button type="button" onClick={onContribute} className="mt-5 w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800">Fazer aporte</button>
     </section>
   )
+}
+
+function getGoalDeadlineInfo(deadline: string) {
+  const monthNames = [
+    'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+  ]
+
+  const match = deadline.trim().match(/([a-zA-ZÀ-ú]+)\s+de\s+(\d{4})/i)
+
+  if (!match) {
+    return null
+  }
+
+  const monthName = match[1].toLowerCase()
+  const monthIndex = monthNames.indexOf(monthName)
+  const year = Number(match[2])
+
+  if (monthIndex === -1 || Number.isNaN(year)) {
+    return null
+  }
+
+  const targetDate = new Date(year, monthIndex, 1)
+  const currentDate = new Date()
+  const currentMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+  const monthsRemaining = Math.max(
+    (targetDate.getFullYear() - currentMonth.getFullYear()) * 12 +
+      (targetDate.getMonth() - currentMonth.getMonth()),
+    1,
+  )
+
+  return {
+    isExpired: targetDate < currentMonth,
+    monthsRemaining,
+  }
 }
