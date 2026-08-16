@@ -11,6 +11,7 @@ export function GoalsPage() {
   const [showForm, setShowForm] = useState(false)
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null)
   const [contribution, setContribution] = useState('')
+  const [isSavingContribution, setIsSavingContribution] = useState(false)
 
   async function createGoal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -30,15 +31,26 @@ export function GoalsPage() {
 
   async function contribute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const amount = Number(contribution)
 
-    if (!selectedGoal || !Number.isFinite(amount) || amount <= 0) {
+    if (!selectedGoal || isSavingContribution) {
       return
     }
 
-    await addContribution(selectedGoal.id, amount)
-    setContribution('')
-    setSelectedGoal(null)
+    const amount = Number(contribution)
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return
+    }
+
+    setIsSavingContribution(true)
+
+    try {
+      await addContribution(selectedGoal.id, amount)
+      setContribution('')
+      setSelectedGoal(null)
+    } finally {
+      setIsSavingContribution(false)
+    }
   }
 
   return (
@@ -66,7 +78,11 @@ export function GoalsPage() {
       ) : goals.length === 0 ? (
         <div className="mt-7 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">Nenhuma meta cadastrada ainda.</div>
       ) : (
-        <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{goals.map((goal) => <GoalCard key={goal.id} goal={goal} onContribute={() => setSelectedGoal(goal)} />)}</div>
+        <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{goals.map((goal) => <GoalCard key={goal.id} goal={goal} onContribute={() => {
+          setSelectedGoal(goal)
+          setContribution('')
+          setIsSavingContribution(false)
+        }} />)}</div>
       )}
 
       {selectedGoal && (
@@ -77,11 +93,11 @@ export function GoalsPage() {
             <p className="mt-2 text-sm text-slate-500">Quanto você quer guardar agora?</p>
             <label className="mt-4 block">
               <span className="mb-2 block text-sm font-medium text-slate-700">Valor do aporte</span>
-              <input value={contribution} onChange={(event) => setContribution(event.target.value)} type="number" min="1" step="0.01" placeholder="Ex.: 250" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none" />
+              <input value={contribution} onChange={(event) => setContribution(event.target.value)} type="number" min="1" step="0.01" placeholder="Ex.: 250" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none" disabled={isSavingContribution} />
             </label>
             <div className="mt-5 flex gap-3">
-              <button type="button" onClick={() => setSelectedGoal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Cancelar</button>
-              <button className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">Salvar</button>
+              <button type="button" onClick={() => setSelectedGoal(null)} disabled={isSavingContribution} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">Cancelar</button>
+              <button disabled={isSavingContribution} className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{isSavingContribution ? 'Salvando...' : 'Salvar'}</button>
             </div>
           </form>
         </div>
