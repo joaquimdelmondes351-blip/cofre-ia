@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Bell, ChartNoAxesCombined, CircleHelp, CreditCard, LayoutDashboard, LogOut, ShieldCheck, Target, WalletCards } from 'lucide-react'
+import { Bell, ChartNoAxesCombined, CircleHelp, CreditCard, FileSpreadsheet, LayoutDashboard, LogOut, ShieldCheck, Target, WalletCards } from 'lucide-react'
 import { AuthRepository } from '@core/data/repositories/AuthRepository'
 import { useAuth } from '@presentation/hooks/useAuth'
 
 const navigation = [
   { label: 'Visão geral', icon: LayoutDashboard, to: '/' },
   { label: 'Movimentações', icon: WalletCards, to: '/movimentacoes' },
+  { label: 'Importar planilha', icon: FileSpreadsheet, to: '/importar-planilha' },
   { label: 'Cartões', icon: CreditCard, to: '/cartoes' },
   { label: 'Metas', icon: Target, to: '/metas' },
   { label: 'Análises', icon: ChartNoAxesCombined, to: '/analises' },

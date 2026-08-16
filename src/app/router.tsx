@@ -8,6 +8,7 @@ import { WorkspacePage } from '@presentation/pages/WorkspacePage'
 import { TransactionsPage } from '@presentation/pages/TransactionsPage'
 import { GoalsPage } from '@presentation/pages/GoalsPage'
 import { CardsPage } from '@presentation/pages/CardsPage'
+import { ImportSpreadsheetPage } from '@presentation/pages/ImportSpreadsheetPage'
 
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const { isAuthenticated } = useAuth()
@@ -31,6 +32,7 @@ export function AppRouter() {
       <Route element={<MainLayout />}>
         <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
         <Route path="/movimentacoes" element={<ProtectedRoute><TransactionsPage /></ProtectedRoute>} />
+        <Route path="/importar-planilha" element={<ProtectedRoute><ImportSpreadsheetPage /></ProtectedRoute>} />
         <Route path="/cartoes" element={<ProtectedRoute><CardsPage /></ProtectedRoute>} />
         <Route path="/metas" element={<ProtectedRoute><GoalsPage /></ProtectedRoute>} />
         <Route path="/analises" element={<ProtectedRoute><WorkspacePage title="Análises" description="Enxergue oportunidades e riscos com mais clareza." icon="analytics" /></ProtectedRoute>} />

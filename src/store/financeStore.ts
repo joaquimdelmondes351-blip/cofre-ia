@@ -14,11 +14,19 @@ export type Transaction = {
   date: string
 }
 
+type AddTransactionInput = {
+  name: string
+  category: string
+  amount: number
+  type: TransactionType
+  date?: string | Date
+}
+
 type FinanceState = {
   transactions: Transaction[]
   loading: boolean
   subscribeToUserTransactions: (uid: string | null) => () => void
-  addTransaction: (transaction: Omit<Transaction, 'id' | 'date'>) => Promise<void>
+  addTransaction: (transaction: AddTransactionInput) => Promise<void>
   removeTransaction: (id: string) => Promise<void>
   clearTransactions: () => void
 }
@@ -68,6 +76,7 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             category: string
             amount: number
             type: TransactionType
+            date?: string | { toDate: () => Date } | Date | number | null
             createdAt?: { toDate: () => Date } | Date | number | null
           }
 
@@ -79,13 +88,23 @@ export const useFinanceStore = create<FinanceState>((set) => ({
                 ? new Date(data.createdAt)
                 : new Date()
 
+          const documentDate = data.date && typeof data.date === 'string'
+            ? new Date(data.date)
+            : data.date && typeof data.date === 'object' && 'toDate' in data.date
+              ? data.date.toDate()
+              : data.date instanceof Date
+                ? data.date
+                : typeof data.date === 'number'
+                  ? new Date(data.date)
+                  : createdAt
+
           return {
             id: document.id,
             name: data.name,
             category: data.category,
             amount: Number(data.amount),
             type: data.type,
-            date: formatDate(createdAt),
+            date: formatDate(documentDate),
           }
         })
 
@@ -111,9 +130,18 @@ export const useFinanceStore = create<FinanceState>((set) => ({
       return
     }
 
+    const normalizedDate = typeof transaction.date === 'string'
+      ? new Date(transaction.date)
+      : transaction.date instanceof Date
+        ? transaction.date
+        : new Date()
+
     await addDoc(collection(db, 'users', uid, 'transactions'), {
-      ...transaction,
+      name: transaction.name,
+      category: transaction.category,
       amount: Number(transaction.amount),
+      type: transaction.type,
+      date: normalizedDate.toISOString(),
       createdAt: new Date(),
     })
   },
