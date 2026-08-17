@@ -15,6 +15,15 @@ type ParsedImport = {
   date: Date
 }
 
+type AutoDetectedImportSummary = {
+  transactions: ParsedImport[]
+  ignored: string[]
+  totals: {
+    income: number
+    expense: number
+  }
+}
+
 const columnLabels: Record<ColumnKey, string> = {
   date: 'Data',
   description: 'Descrição',
@@ -40,16 +49,25 @@ const normalizeHeader = (value: string) => value
   .replace(/\s+/g, ' ')
   .trim()
 
+const normalizeText = (value: unknown) => normalizeHeader(String(value ?? ''))
+
 const parseAmount = (value: string): number | null => {
   if (!value) {
     return null
   }
 
-  let cleaned = value.replace(/[^0-9,\.\-()]/g, '').trim()
+  const raw = value.trim()
+  if (!raw || raw.startsWith('=')) {
+    return null
+  }
+
+  let cleaned = raw.replace(/[^0-9,\.\-()R$\s]/gi, '').trim()
 
   if (!cleaned) {
     return null
   }
+
+  cleaned = cleaned.replace(/R\$/gi, '').trim()
 
   if (cleaned.includes('(') && cleaned.includes(')')) {
     cleaned = `-${cleaned.replace(/[()]/g, '')}`
@@ -81,34 +99,57 @@ const parseDateValue = (value: string): Date | null => {
   }
 
   const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('=')) {
+    return null
+  }
+
   const directDate = new Date(trimmed)
   if (!Number.isNaN(directDate.getTime())) {
     return directDate
   }
 
   const patterns = [
-    /^\d{4}-\d{2}-\d{2}$/, // yyyy-mm-dd
-    /^\d{2}[-/]\d{2}[-/]\d{4}$/, // dd/mm/yyyy or dd-mm-yyyy
-    /^\d{4}[-/]\d{2}[-/]\d{2}$/, // yyyy/mm/dd
-    /^\d{2}\/\d{2}\/\d{2}$/, // dd/mm/yy
+    /^\d{4}-\d{2}-\d{2}$/,
+    /^\d{2}[-/]\d{2}[-/]\d{4}$/,
+    /^\d{4}[-/]\d{2}[-/]\d{2}$/,
+    /^\d{2}\/\d{2}\/\d{2}$/,
+    /^\d{1,2}\/\d{1,2}$/,
+    /^\d{1,2}-\d{1,2}$/,
   ]
 
   for (const pattern of patterns) {
-    if (pattern.test(trimmed)) {
-      if (trimmed.includes('-') && trimmed.length === 10 && trimmed[4] === '-') {
-        const [year, month, day] = trimmed.split('-').map(Number)
-        return new Date(year, month - 1, day)
+    if (!pattern.test(trimmed)) {
+      continue
+    }
+
+    if (trimmed.includes('-') && trimmed.length === 10 && trimmed[4] === '-') {
+      const [year, month, day] = trimmed.split('-').map(Number)
+      return new Date(year, month - 1, day)
+    }
+
+    if (trimmed.includes('/') && trimmed.split('/').length >= 2) {
+      const parts = trimmed.split('/')
+      if (parts.length === 2) {
+        const [day, month] = parts.map(Number)
+        if (!Number.isNaN(day) && !Number.isNaN(month)) {
+          return new Date(new Date().getFullYear(), month - 1, day)
+        }
       }
 
-      if (trimmed.includes('/') && trimmed.length >= 8) {
-        const [first, second, third] = trimmed.split(/[\/]/)
-        const day = Number(first)
-        const month = Number(second)
-        const year = Number(third.length === 2 ? `20${third}` : third)
+      const [first, second, third] = parts
+      const day = Number(first)
+      const month = Number(second)
+      const year = Number(third.length === 2 ? `20${third}` : third)
 
-        if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
-          return new Date(year, month - 1, day)
-        }
+      if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
+        return new Date(year, month - 1, day)
+      }
+    }
+
+    if (trimmed.includes('-') && trimmed.split('-').length === 2) {
+      const [day, month] = trimmed.split('-').map(Number)
+      if (!Number.isNaN(day) && !Number.isNaN(month)) {
+        return new Date(new Date().getFullYear(), month - 1, day)
       }
     }
   }
@@ -146,19 +187,19 @@ const suggestCategory = (description: string, rawCategory?: string): string => {
 
   const normalized = normalizeHeader(description)
 
-  if (/(mercado|supermercado|padaria|aliment|hortifrut|compras|feira|mercado)/.test(normalized)) {
+  if (/(mercado|supermercado|padaria|aliment|hortifrut|compras|feira)/.test(normalized)) {
     return 'Mercado / Alimentação'
   }
 
-  if (/(uber|transporte|taxi|onibus|ônibus|metro|combust|carro|locacao|locação)/.test(normalized)) {
+  if (/(uber|transporte|taxi|onibus|metro|combust|carro|locacao|locação)/.test(normalized)) {
     return 'Uber / Transporte'
   }
 
-  if (/(aluguel|condominio|moradia|apartamento|casa|iptu|conta de energia|luz|agua|água)/.test(normalized)) {
+  if (/(aluguel|condominio|moradia|apartamento|casa|iptu|energia|luz|agua|água)/.test(normalized)) {
     return 'Aluguel / Moradia'
   }
 
-  if (/(salario|salário|renda|receita|bonus|pagamento|freela|venda)/.test(normalized)) {
+  if (/(salario|salário|renda|receita|bonus|freela|venda)/.test(normalized)) {
     return 'Salário / Receita'
   }
 
@@ -190,12 +231,135 @@ const getAutoDetectedColumns = (rows: RowData[]): ColumnMap => {
 
 const buildTransactionKey = (transaction: ParsedImport) => `${transaction.name.toLowerCase()}|${transaction.amount}|${transaction.date.toISOString()}|${transaction.category.toLowerCase()}|${transaction.type}`
 
+const isVisualSummaryText = (text: string) => {
+  const normalized = normalizeText(text)
+  if (!normalized) {
+    return true
+  }
+
+  return /^(saldo|total|subtotal|resumo|mes|mês|meses|titulo|title|receber|pagar|à receber|à pagar|a receber|a pagar)$/i.test(normalized)
+    || /(saldo|total|subtotal|resumo|mes|mês|titulo|title)/i.test(normalized)
+}
+
+const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImportSummary | null => {
+  const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, raw: false, defval: '' }) as string[][]
+
+  if (!rows.length) {
+    return null
+  }
+
+  const transactions: ParsedImport[] = []
+  const ignored: string[] = []
+  const seen = new Set<string>()
+
+  let activeSection: 'income' | 'expense' | null = null
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? []
+    const rawText = row.join(' ').trim()
+    const normalizedText = normalizeText(rawText)
+
+    if (!normalizedText) {
+      continue
+    }
+
+    if (/(à receber|a receber|receber)/i.test(normalizedText)) {
+      activeSection = 'income'
+      continue
+    }
+
+    if (/(à pagar|a pagar|pagar)/i.test(normalizedText)) {
+      activeSection = 'expense'
+      continue
+    }
+
+    if (isVisualSummaryText(rawText) || /\b(total|saldo|resumo|subtotal)\b/i.test(normalizedText)) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    if (!activeSection) {
+      continue
+    }
+
+    const dateCandidate = row.find((cell) => {
+      const value = String(cell ?? '').trim()
+      return Boolean(value) && parseDateValue(value) !== null && !isVisualSummaryText(value)
+    })
+    const amountCandidate = row.find((cell) => {
+      const value = String(cell ?? '').trim()
+      return Boolean(value) && !value.startsWith('=') && parseAmount(value) !== null && !isVisualSummaryText(value)
+    })
+
+    if (!dateCandidate || !amountCandidate) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    const date = parseDateValue(String(dateCandidate))
+    const amount = parseAmount(String(amountCandidate))
+
+    if (!date || amount === null) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    const description = row
+      .map((cell) => String(cell ?? '').trim())
+      .filter((cell) => cell && !cell.startsWith('=') && !/^(r\$|rs|\$)/i.test(cell) && parseAmount(cell) === null && parseDateValue(cell) === null)
+      .filter((cell) => !isVisualSummaryText(cell))
+      .filter((cell) => !/^(total|saldo|subtotal|resumo)$/i.test(cell))
+      .join(' ')
+      .trim()
+
+    if (!description) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    const parsed = {
+      name: description,
+      category: suggestCategory(description),
+      amount: Math.abs(amount),
+      type: activeSection,
+      date,
+    }
+
+    const key = buildTransactionKey(parsed)
+    if (seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    transactions.push(parsed)
+  }
+
+  if (!transactions.length) {
+    return null
+  }
+
+  const totals = transactions.reduce(
+    (accumulator, item) => {
+      if (item.type === 'income') {
+        accumulator.income += item.amount
+      } else {
+        accumulator.expense += item.amount
+      }
+      return accumulator
+    },
+    { income: 0, expense: 0 },
+  )
+
+  return { transactions, ignored, totals }
+}
+
 export function ImportSpreadsheetPage() {
   const transactions = useFinanceStore((state) => state.transactions)
   const addTransaction = useFinanceStore((state) => state.addTransaction)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewRows, setPreviewRows] = useState<RowData[]>([])
   const [columnMap, setColumnMap] = useState<ColumnMap>({})
+  const [autoDetectedImport, setAutoDetectedImport] = useState<AutoDetectedImportSummary | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
 
@@ -217,6 +381,7 @@ export function ImportSpreadsheetPage() {
 
     setSelectedFile(file)
     setStatusMessage('')
+    setAutoDetectedImport(null)
 
     const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv', 'application/vnd.ms-excel']
 
@@ -231,17 +396,26 @@ export function ImportSpreadsheetPage() {
       const buffer = await file.arrayBuffer()
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
       const worksheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json<RowData>(worksheet, { defval: '', raw: false })
+      const rawRows = XLSX.utils.sheet_to_json<RowData>(worksheet, { defval: '', raw: false })
 
-      if (!rows.length) {
+      if (!rawRows.length) {
         setPreviewRows([])
         setColumnMap({})
         setStatusMessage('A planilha está vazia ou não foi possível ler as linhas.')
         return
       }
 
-      setPreviewRows(rows.slice(0, 8))
-      setColumnMap(getAutoDetectedColumns(rows))
+      const detected = detectVisualFinanceImport(worksheet)
+      if (detected && detected.transactions.length > 0) {
+        setAutoDetectedImport(detected)
+        setPreviewRows(rawRows.slice(0, 8))
+        setColumnMap({})
+        setStatusMessage('Formato visual detectado automaticamente. Revise a prévia e confirme a importação.')
+        return
+      }
+
+      setPreviewRows(rawRows.slice(0, 8))
+      setColumnMap(getAutoDetectedColumns(rawRows))
     } catch {
       setPreviewRows([])
       setColumnMap({})
@@ -256,18 +430,45 @@ export function ImportSpreadsheetPage() {
     }))
   }
 
-  const handleImport = async () => {
-    if (!previewRows.length || !selectedFile) {
-      setStatusMessage('Selecione uma planilha antes de continuar.')
-      return
+  const persistTransactions = async (rows: ParsedImport[]) => {
+    const seenInImport = new Set<string>()
+    const existingKeys = new Set(transactions.map((transaction) => buildTransactionKey({
+      name: transaction.name,
+      category: transaction.category,
+      amount: transaction.amount,
+      type: transaction.type,
+      date: new Date(transaction.date),
+    })))
+
+    const rowsToSave = rows.filter((transaction) => {
+      const key = buildTransactionKey(transaction)
+      if (seenInImport.has(key) || existingKeys.has(key)) {
+        return false
+      }
+      seenInImport.add(key)
+      return true
+    })
+
+    if (!rowsToSave.length) {
+      return 0
     }
 
-    const dateColumn = columnMap.date
-    const descriptionColumn = columnMap.description
-    const amountColumn = columnMap.amount
+    for (const transaction of rowsToSave) {
+      await addTransaction({
+        name: transaction.name,
+        category: transaction.category,
+        amount: transaction.amount,
+        type: transaction.type,
+        date: transaction.date,
+      })
+    }
 
-    if (!dateColumn || !descriptionColumn || !amountColumn) {
-      setStatusMessage('Mapeie as colunas de data, descrição e valor para importar.')
+    return rowsToSave.length
+  }
+
+  const handleImport = async () => {
+    if (!selectedFile) {
+      setStatusMessage('Selecione uma planilha antes de continuar.')
       return
     }
 
@@ -275,6 +476,40 @@ export function ImportSpreadsheetPage() {
     setStatusMessage('')
 
     try {
+      if (autoDetectedImport && autoDetectedImport.transactions.length > 0) {
+        const importedCount = await persistTransactions(autoDetectedImport.transactions)
+
+        if (!importedCount) {
+          setStatusMessage('Todas as movimentações desta importação já estão cadastradas.')
+          return
+        }
+
+        setStatusMessage(`${importedCount} movimentação${importedCount > 1 ? 'ões' : ' '} importada${importedCount > 1 ? 's' : ''} com sucesso.`)
+        setSelectedFile(null)
+        setPreviewRows([])
+        setColumnMap({})
+        setAutoDetectedImport(null)
+        const fileInput = document.getElementById('spreadsheet-input') as HTMLInputElement | null
+        if (fileInput) {
+          fileInput.value = ''
+        }
+        return
+      }
+
+      if (!previewRows.length) {
+        setStatusMessage('Selecione uma planilha antes de continuar.')
+        return
+      }
+
+      const dateColumn = columnMap.date
+      const descriptionColumn = columnMap.description
+      const amountColumn = columnMap.amount
+
+      if (!dateColumn || !descriptionColumn || !amountColumn) {
+        setStatusMessage('Mapeie as colunas de data, descrição e valor para importar.')
+        return
+      }
+
       const importRows: ParsedImport[] = []
       const seenInImport = new Set<string>()
 
@@ -326,36 +561,18 @@ export function ImportSpreadsheetPage() {
         return
       }
 
-      const existingKeys = new Set(transactions.map((transaction) => buildTransactionKey({
-        name: transaction.name,
-        category: transaction.category,
-        amount: transaction.amount,
-        type: transaction.type,
-        date: new Date(transaction.date.includes('/') ? transaction.date.split('/').reverse().join('-') : transaction.date),
-      })))
+      const importedCount = await persistTransactions(importRows)
 
-      const transactionsToSave = importRows.filter((transaction) => !existingKeys.has(buildTransactionKey(transaction)))
-
-      if (!transactionsToSave.length) {
+      if (!importedCount) {
         setStatusMessage('Todas as movimentações desta importação já estão cadastradas.')
         return
       }
 
-      for (const transaction of transactionsToSave) {
-        await addTransaction({
-          name: transaction.name,
-          category: transaction.category,
-          amount: transaction.amount,
-          type: transaction.type,
-          date: transaction.date,
-        })
-      }
-
-      const importedCount = transactionsToSave.length
       setStatusMessage(`${importedCount} movimentação${importedCount > 1 ? 'ões' : ' '} importada${importedCount > 1 ? 's' : ''} com sucesso.`)
       setSelectedFile(null)
       setPreviewRows([])
       setColumnMap({})
+      setAutoDetectedImport(null)
       const fileInput = document.getElementById('spreadsheet-input') as HTMLInputElement | null
       if (fileInput) {
         fileInput.value = ''
@@ -394,7 +611,73 @@ export function ImportSpreadsheetPage() {
           </div>
         )}
 
-        {previewRows.length > 0 && (
+        {autoDetectedImport && autoDetectedImport.transactions.length > 0 && (
+          <div className="mt-6 space-y-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <p className="text-xs font-medium uppercase tracking-[0.14em] text-emerald-700">Receitas</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.income.toFixed(2).replace('.', ',')}</p>
+              </div>
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <p className="text-xs font-medium uppercase tracking-[0.14em] text-rose-700">Despesas</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.expense.toFixed(2).replace('.', ',')}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-600">Lançamentos</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{autoDetectedImport.transactions.length}</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <Wand2 size={16} className="text-emerald-600" />
+                <h2 className="font-semibold text-slate-900">Prévia detectada automaticamente</h2>
+              </div>
+
+              <div className="space-y-2">
+                {autoDetectedImport.transactions.slice(0, 8).map((transaction, index) => (
+                  <div key={`${transaction.name}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <div>
+                      <p className="font-medium text-slate-800">{transaction.name}</p>
+                      <p className="text-xs text-slate-500">{transaction.category}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={transaction.type === 'income' ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700'}>
+                        {transaction.type === 'income' ? '+' : '-'} R$ {transaction.amount.toFixed(2).replace('.', ',')}
+                      </p>
+                      <p className="text-xs text-slate-500">{transaction.date.toLocaleDateString('pt-BR')}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {autoDetectedImport.ignored.length > 0 && (
+                <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-600">Linhas ignoradas</p>
+                  <div className="space-y-1 text-xs text-slate-500">
+                    {autoDetectedImport.ignored.slice(0, 8).map((ignoredLine, index) => (
+                      <p key={`${ignoredLine}-${index}`}>{ignoredLine}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <p className="text-sm text-slate-500">O sistema detectou o formato visual do bloco mensal e não pediu mapeamento manual.</p>
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={isProcessing}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isProcessing ? 'Importando...' : 'Confirmar importação'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {previewRows.length > 0 && !autoDetectedImport && (
           <div className="mt-6 space-y-5">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 flex items-center gap-2">
