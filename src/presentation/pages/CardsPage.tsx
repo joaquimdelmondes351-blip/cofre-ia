@@ -12,7 +12,7 @@ export function CardsPage() {
   const transactions = useFinanceStore((state) => state.transactions)
   const [showForm, setShowForm] = useState(false)
 
-  const cardBills = useMemo(() => getCardBillsById(transactions), [transactions])
+  const cardBills = useMemo(() => getCardBillsById(transactions, cards), [cards, transactions])
 
   async function handleAddCard(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

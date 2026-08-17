@@ -1,32 +1,23 @@
+import type { Card } from '@store/cardsStore'
 import type { Transaction } from '@store/financeStore'
 
-export function resolveCardId(value: unknown): string | null {
+export function normalizeCardRef(value: unknown): string | null {
   if (typeof value === 'string') {
     const normalized = value.trim()
-    return normalized ? normalized : null
+    return normalized ? normalized.toLowerCase() : null
   }
 
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
 
-    if (typeof record.id === 'string') {
-      const normalized = record.id.trim()
-      if (normalized) {
-        return normalized
-      }
-    }
+    const candidates = [record.id, record.cardId, record.card_id, record.card, record.name]
 
-    if (typeof record.cardId === 'string') {
-      const normalized = record.cardId.trim()
-      if (normalized) {
-        return normalized
-      }
-    }
-
-    if (typeof record.card_id === 'string') {
-      const normalized = record.card_id.trim()
-      if (normalized) {
-        return normalized
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const normalized = candidate.trim()
+        if (normalized) {
+          return normalized.toLowerCase()
+        }
       }
     }
   }
@@ -34,7 +25,23 @@ export function resolveCardId(value: unknown): string | null {
   return null
 }
 
-export function getCardBillsById(transactions: Transaction[]) {
+function resolveTransactionCardId(transaction: Transaction, cards: Card[] = []) {
+  const directValue = (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).cardId ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card_id ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card
+
+  const directRef = normalizeCardRef(directValue)
+  if (directRef) {
+    const exactCard = cards.find((card) => card.id.toLowerCase() === directRef || card.name.trim().toLowerCase() === directRef)
+    if (exactCard) {
+      return exactCard.id
+    }
+
+    return directRef
+  }
+
+  return null
+}
+
+export function getCardBillsById(transactions: Transaction[], cards: Card[] = []) {
   const billMap = new Map<string, number>()
 
   transactions.forEach((transaction) => {
@@ -42,13 +49,12 @@ export function getCardBillsById(transactions: Transaction[]) {
       return
     }
 
-    const normalizedCardId = resolveCardId((transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).cardId ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card_id ?? (transaction as Transaction & { cardId?: unknown; card_id?: unknown; card?: unknown }).card)
-
-    if (!normalizedCardId) {
+    const cardId = resolveTransactionCardId(transaction, cards)
+    if (!cardId) {
       return
     }
 
-    billMap.set(normalizedCardId, (billMap.get(normalizedCardId) ?? 0) + transaction.amount)
+    billMap.set(cardId, (billMap.get(cardId) ?? 0) + transaction.amount)
   })
 
   return billMap

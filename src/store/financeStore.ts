@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, Unsubscribe } from 'firebase/firestore'
 import { db } from '@core/infra/firebase/firestore'
-import { resolveCardId } from '@shared/utils/cardBilling'
+import { normalizeCardRef } from '@shared/utils/cardBilling'
 import { useAuthStore } from '@store/authStore'
 
 export type TransactionType = 'income' | 'expense'
@@ -119,7 +119,7 @@ export const useFinanceStore = create<FinanceState>((set) => ({
             date: formatDate(documentDate),
             dateValue,
             paymentMethod: data.paymentMethod ?? 'cash',
-            cardId: resolveCardId(data.cardId ?? data.card_id ?? data.card),
+            cardId: normalizeCardRef(data.cardId ?? data.card_id ?? data.card),
           }
         })
 
