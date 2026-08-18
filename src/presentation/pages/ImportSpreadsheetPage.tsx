@@ -2,6 +2,7 @@ import { ChangeEvent, useMemo, useState } from 'react'
 import { ArrowDownRight, CheckCircle2, FileSpreadsheet, UploadCloud, Wand2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useFinanceStore } from '@store/financeStore'
+import { detectVisualFinanceImport, type AutoDetectedImportSummary } from '@shared/utils/visualImportParser'
 
 type ColumnKey = 'date' | 'description' | 'amount' | 'type' | 'category'
 type RowData = Record<string, unknown>
@@ -13,15 +14,6 @@ type ParsedImport = {
   amount: number
   type: 'income' | 'expense'
   date: Date
-}
-
-type AutoDetectedImportSummary = {
-  transactions: ParsedImport[]
-  ignored: string[]
-  totals: {
-    income: number
-    expense: number
-  }
 }
 
 const columnLabels: Record<ColumnKey, string> = {
@@ -241,6 +233,40 @@ const isVisualSummaryText = (text: string) => {
     || /(saldo|total|subtotal|resumo|mes|mês|titulo|title)/i.test(normalized)
 }
 
+const isLikelyDescriptionCell = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('=') || isVisualSummaryText(trimmed)) {
+    return false
+  }
+
+  if (parseAmount(trimmed) !== null || parseDateValue(trimmed) !== null) {
+    return false
+  }
+
+  const normalized = normalizeText(trimmed)
+  if (!normalized || normalized.length < 3) {
+    return false
+  }
+
+  return !/^(parcela|parcelas|observacao|observação|obs|titulo|title|mes|mês|saldo|total|subtotal|resumo)$/i.test(normalized)
+    && !/\b(parcela|observacao|observação|obs|titulo|mes|mês)\b/i.test(normalized)
+}
+
+const isLikelyAmountCell = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('=') || isVisualSummaryText(trimmed)) {
+    return false
+  }
+
+  const normalized = normalizeText(trimmed)
+  if (!normalized || /^(parcela|parcelas|observacao|observação|obs|titulo|title|mes|mês)$/i.test(normalized)) {
+    return false
+  }
+
+  const numericValue = parseAmount(trimmed)
+  return numericValue !== null && Math.abs(numericValue) >= 1
+}
+
 const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImportSummary | null => {
   const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, raw: false, defval: '' }) as string[][]
 
@@ -251,6 +277,9 @@ const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImpor
   const transactions: ParsedImport[] = []
   const ignored: string[] = []
   const seen = new Set<string>()
+  const usedAmounts = new Map<'income' | 'expense', Set<number>>()
+  usedAmounts.set('income', new Set())
+  usedAmounts.set('expense', new Set())
 
   let activeSection: 'income' | 'expense' | null = null
 
@@ -282,37 +311,35 @@ const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImpor
       continue
     }
 
-    const dateCandidate = row.find((cell) => {
-      const value = String(cell ?? '').trim()
-      return Boolean(value) && parseDateValue(value) !== null && !isVisualSummaryText(value)
-    })
-    const amountCandidate = row.find((cell) => {
-      const value = String(cell ?? '').trim()
-      return Boolean(value) && !value.startsWith('=') && parseAmount(value) !== null && !isVisualSummaryText(value)
-    })
+    const cells = row.map((cell) => String(cell ?? '').trim())
+    const descriptionCandidates = cells.filter(isLikelyDescriptionCell)
+    const amountCells = cells.filter(isLikelyAmountCell)
 
-    if (!dateCandidate || !amountCandidate) {
+    if (descriptionCandidates.length === 0 || amountCells.length !== 1) {
       ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
       continue
     }
 
-    const date = parseDateValue(String(dateCandidate))
-    const amount = parseAmount(String(amountCandidate))
-
-    if (!date || amount === null) {
+    const amount = parseAmount(amountCells[0])
+    if (amount === null) {
       ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
       continue
     }
 
-    const description = row
-      .map((cell) => String(cell ?? '').trim())
-      .filter((cell) => cell && !cell.startsWith('=') && !/^(r\$|rs|\$)/i.test(cell) && parseAmount(cell) === null && parseDateValue(cell) === null)
-      .filter((cell) => !isVisualSummaryText(cell))
-      .filter((cell) => !/^(total|saldo|subtotal|resumo)$/i.test(cell))
+    const amountKey = Math.round(Math.abs(amount) * 100)
+    const sectionSet = usedAmounts.get(activeSection)
+    if (sectionSet && sectionSet.has(amountKey)) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText} (valor repetido)`)
+      continue
+    }
+    sectionSet?.add(amountKey)
+
+    const description = descriptionCandidates
+      .filter((cell) => !/^(r\$|rs|\$)$/i.test(cell))
       .join(' ')
       .trim()
 
-    if (!description) {
+    if (!description || /\b(parcela|observacao|observação|obs)\b/i.test(description)) {
       ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
       continue
     }
@@ -322,10 +349,30 @@ const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImpor
       category: suggestCategory(description),
       amount: Math.abs(amount),
       type: activeSection,
-      date,
+      date: new Date(),
     }
 
-    const key = buildTransactionKey(parsed)
+    const nonSummaryRow = cells.some((cell) => /\d{1,2}[-/]\d{1,2}/.test(cell) || /\d{4}-\d{2}-\d{2}/.test(cell) || /\d{2}\/\d{2}\/\d{4}/.test(cell))
+    if (!nonSummaryRow) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    const dateCandidate = cells.find((cell) => parseDateValue(cell) !== null && !isVisualSummaryText(cell))
+    if (!dateCandidate) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    const date = parseDateValue(dateCandidate)
+    if (!date) {
+      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
+      continue
+    }
+
+    parsed.date = date
+
+    const key = buildTransactionKey({ ...parsed, date })
     if (seen.has(key)) {
       continue
     }
@@ -373,6 +420,8 @@ export function ImportSpreadsheetPage() {
 
   const previewHeaders = useMemo(() => availableHeaders.length ? availableHeaders : [], [availableHeaders])
 
+  const hasSuspiciousAutoImport = Boolean(autoDetectedImport && autoDetectedImport.transactions.length > 0 && !autoDetectedImport.isValid)
+
   const handleFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) {
@@ -395,7 +444,8 @@ export function ImportSpreadsheetPage() {
     try {
       const buffer = await file.arrayBuffer()
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+      const firstSheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[firstSheetName]
       const rawRows = XLSX.utils.sheet_to_json<RowData>(worksheet, { defval: '', raw: false })
 
       if (!rawRows.length) {
@@ -405,12 +455,14 @@ export function ImportSpreadsheetPage() {
         return
       }
 
-      const detected = detectVisualFinanceImport(worksheet)
+      const detected = detectVisualFinanceImport(workbook)
       if (detected && detected.transactions.length > 0) {
         setAutoDetectedImport(detected)
         setPreviewRows(rawRows.slice(0, 8))
         setColumnMap({})
-        setStatusMessage('Formato visual detectado automaticamente. Revise a prévia e confirme a importação.')
+        setStatusMessage(detected.isValid
+          ? 'Formato visual detectado automaticamente. Revise a prévia e confirme a importação.'
+          : detected.validationMessage ?? 'Prévia bloqueada. Corrija os dados da planilha antes de confirmar.')
         return
       }
 
@@ -477,7 +529,18 @@ export function ImportSpreadsheetPage() {
 
     try {
       if (autoDetectedImport && autoDetectedImport.transactions.length > 0) {
-        const importedCount = await persistTransactions(autoDetectedImport.transactions)
+        if (!autoDetectedImport.isValid) {
+          setStatusMessage(autoDetectedImport.validationMessage ?? 'Prévia bloqueada. Corrija os dados da planilha antes de confirmar.')
+          return
+        }
+
+        const importedCount = await persistTransactions(autoDetectedImport.transactions.map((transaction) => ({
+          name: transaction.name,
+          category: transaction.category,
+          amount: transaction.amount,
+          type: transaction.type,
+          date: transaction.date,
+        })))
 
         if (!importedCount) {
           setStatusMessage('Todas as movimentações desta importação já estão cadastradas.')
@@ -613,18 +676,22 @@ export function ImportSpreadsheetPage() {
 
         {autoDetectedImport && autoDetectedImport.transactions.length > 0 && (
           <div className="mt-6 space-y-5">
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                <p className="text-xs font-medium uppercase tracking-[0.14em] text-emerald-700">Receitas</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.income.toFixed(2).replace('.', ',')}</p>
-              </div>
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                <p className="text-xs font-medium uppercase tracking-[0.14em] text-rose-700">Despesas</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.expense.toFixed(2).replace('.', ',')}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-600">Lançamentos</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{autoDetectedImport.transactions.length}</p>
+<div className="grid gap-4 md:grid-cols-4">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-emerald-700">Receitas</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.income.toFixed(2).replace('.', ',')}</p>
+                </div>
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-rose-700">Despesas</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.totals.expense.toFixed(2).replace('.', ',')}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-600">Lançamentos</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">{autoDetectedImport.transactions.length}</p>
+                </div>
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-indigo-700">Total da prévia</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">R$ {autoDetectedImport.previewTotal.toFixed(2).replace('.', ',')}</p>
               </div>
             </div>
 
@@ -636,10 +703,10 @@ export function ImportSpreadsheetPage() {
 
               <div className="space-y-2">
                 {autoDetectedImport.transactions.slice(0, 8).map((transaction, index) => (
-                  <div key={`${transaction.name}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <div key={`${transaction.name}-${transaction.sourceSheet}-${transaction.sourceRow}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                     <div>
                       <p className="font-medium text-slate-800">{transaction.name}</p>
-                      <p className="text-xs text-slate-500">{transaction.category}</p>
+                      <p className="text-xs text-slate-500">{transaction.category} • {transaction.sourceSheet} • linha {transaction.sourceRow}</p>
                     </div>
                     <div className="text-right">
                       <p className={transaction.type === 'income' ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700'}>
@@ -664,14 +731,14 @@ export function ImportSpreadsheetPage() {
             </div>
 
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-              <p className="text-sm text-slate-500">O sistema detectou o formato visual do bloco mensal e não pediu mapeamento manual.</p>
+              <p className="text-sm text-slate-500">{hasSuspiciousAutoImport ? 'Prévia suspeita: valores repetidos ou bloco sem receita/despesa coerentes; importação bloqueada.' : 'O sistema detectou o formato visual do bloco mensal e não pediu mapeamento manual.'}</p>
               <button
                 type="button"
                 onClick={handleImport}
-                disabled={isProcessing}
+                disabled={isProcessing || hasSuspiciousAutoImport}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isProcessing ? 'Importando...' : 'Confirmar importação'}
+                {isProcessing ? 'Importando...' : hasSuspiciousAutoImport ? 'Prévia bloqueada' : 'Confirmar importação'}
               </button>
             </div>
           </div>
