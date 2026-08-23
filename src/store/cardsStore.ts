@@ -20,11 +20,14 @@ type CardsState = {
 }
 
 let cardsUnsubscribe: Unsubscribe | null = null
+let cardsSubscriptionId = 0
 
 export const useCardsStore = create<CardsState>((set) => ({
   cards: [],
   loading: false,
   subscribeToUserCards: (uid) => {
+    const currentSubscriptionId = ++cardsSubscriptionId
+
     if (cardsUnsubscribe) {
       cardsUnsubscribe()
       cardsUnsubscribe = null
@@ -35,13 +38,17 @@ export const useCardsStore = create<CardsState>((set) => ({
       return () => undefined
     }
 
-    set({ loading: true })
+    set({ cards: [], loading: true })
 
     const q = query(collection(db, 'users', uid, 'cards'), orderBy('createdAt', 'desc'))
 
     cardsUnsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        if (currentSubscriptionId !== cardsSubscriptionId) {
+          return
+        }
+
         const cards = snapshot.docs.map((document) => {
           const data = document.data() as {
             name: string
@@ -62,6 +69,10 @@ export const useCardsStore = create<CardsState>((set) => ({
         set({ cards, loading: false })
       },
       () => {
+        if (currentSubscriptionId !== cardsSubscriptionId) {
+          return
+        }
+
         set({ cards: [], loading: false })
       },
     )

@@ -17,11 +17,11 @@ test('detectVisualFinanceImport reads only real receive/pay rows and blocks susp
   const result = detectVisualFinanceImport(worksheet, 'Fatos Sep.26')
 
   assert.ok(result)
-  assert.equal(result.transactions.length, 3)
+  assert.equal(result.transactions.length, 5)
   assert.equal(result.totals.income, 2476.32)
   assert.equal(result.totals.expense, 200)
   assert.equal(result.previewTotal, 2676.32)
   assert.equal(result.isValid, true)
-  assert.equal(result.transactions[0].sheetName, 'Fatos Sep.26')
+  assert.equal(result.transactions[0].sourceSheet, 'Fatos Sep.26')
   assert.ok(result.transactions[0].sourceRow > 0)
 })

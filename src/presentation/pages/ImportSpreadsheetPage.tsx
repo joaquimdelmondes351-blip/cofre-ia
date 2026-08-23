@@ -41,8 +41,6 @@ const normalizeHeader = (value: string) => value
   .replace(/\s+/g, ' ')
   .trim()
 
-const normalizeText = (value: unknown) => normalizeHeader(String(value ?? ''))
-
 const parseAmount = (value: string): number | null => {
   if (!value) {
     return null
@@ -223,183 +221,6 @@ const getAutoDetectedColumns = (rows: RowData[]): ColumnMap => {
 
 const buildTransactionKey = (transaction: ParsedImport) => `${transaction.name.toLowerCase()}|${transaction.amount}|${transaction.date.toISOString()}|${transaction.category.toLowerCase()}|${transaction.type}`
 
-const isVisualSummaryText = (text: string) => {
-  const normalized = normalizeText(text)
-  if (!normalized) {
-    return true
-  }
-
-  return /^(saldo|total|subtotal|resumo|mes|mês|meses|titulo|title|receber|pagar|à receber|à pagar|a receber|a pagar)$/i.test(normalized)
-    || /(saldo|total|subtotal|resumo|mes|mês|titulo|title)/i.test(normalized)
-}
-
-const isLikelyDescriptionCell = (value: string) => {
-  const trimmed = value.trim()
-  if (!trimmed || trimmed.startsWith('=') || isVisualSummaryText(trimmed)) {
-    return false
-  }
-
-  if (parseAmount(trimmed) !== null || parseDateValue(trimmed) !== null) {
-    return false
-  }
-
-  const normalized = normalizeText(trimmed)
-  if (!normalized || normalized.length < 3) {
-    return false
-  }
-
-  return !/^(parcela|parcelas|observacao|observação|obs|titulo|title|mes|mês|saldo|total|subtotal|resumo)$/i.test(normalized)
-    && !/\b(parcela|observacao|observação|obs|titulo|mes|mês)\b/i.test(normalized)
-}
-
-const isLikelyAmountCell = (value: string) => {
-  const trimmed = value.trim()
-  if (!trimmed || trimmed.startsWith('=') || isVisualSummaryText(trimmed)) {
-    return false
-  }
-
-  const normalized = normalizeText(trimmed)
-  if (!normalized || /^(parcela|parcelas|observacao|observação|obs|titulo|title|mes|mês)$/i.test(normalized)) {
-    return false
-  }
-
-  const numericValue = parseAmount(trimmed)
-  return numericValue !== null && Math.abs(numericValue) >= 1
-}
-
-const detectVisualFinanceImport = (worksheet: XLSX.WorkSheet): AutoDetectedImportSummary | null => {
-  const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, raw: false, defval: '' }) as string[][]
-
-  if (!rows.length) {
-    return null
-  }
-
-  const transactions: ParsedImport[] = []
-  const ignored: string[] = []
-  const seen = new Set<string>()
-  const usedAmounts = new Map<'income' | 'expense', Set<number>>()
-  usedAmounts.set('income', new Set())
-  usedAmounts.set('expense', new Set())
-
-  let activeSection: 'income' | 'expense' | null = null
-
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex] ?? []
-    const rawText = row.join(' ').trim()
-    const normalizedText = normalizeText(rawText)
-
-    if (!normalizedText) {
-      continue
-    }
-
-    if (/(à receber|a receber|receber)/i.test(normalizedText)) {
-      activeSection = 'income'
-      continue
-    }
-
-    if (/(à pagar|a pagar|pagar)/i.test(normalizedText)) {
-      activeSection = 'expense'
-      continue
-    }
-
-    if (isVisualSummaryText(rawText) || /\b(total|saldo|resumo|subtotal)\b/i.test(normalizedText)) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    if (!activeSection) {
-      continue
-    }
-
-    const cells = row.map((cell) => String(cell ?? '').trim())
-    const descriptionCandidates = cells.filter(isLikelyDescriptionCell)
-    const amountCells = cells.filter(isLikelyAmountCell)
-
-    if (descriptionCandidates.length === 0 || amountCells.length !== 1) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    const amount = parseAmount(amountCells[0])
-    if (amount === null) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    const amountKey = Math.round(Math.abs(amount) * 100)
-    const sectionSet = usedAmounts.get(activeSection)
-    if (sectionSet && sectionSet.has(amountKey)) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText} (valor repetido)`)
-      continue
-    }
-    sectionSet?.add(amountKey)
-
-    const description = descriptionCandidates
-      .filter((cell) => !/^(r\$|rs|\$)$/i.test(cell))
-      .join(' ')
-      .trim()
-
-    if (!description || /\b(parcela|observacao|observação|obs)\b/i.test(description)) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    const parsed = {
-      name: description,
-      category: suggestCategory(description),
-      amount: Math.abs(amount),
-      type: activeSection,
-      date: new Date(),
-    }
-
-    const nonSummaryRow = cells.some((cell) => /\d{1,2}[-/]\d{1,2}/.test(cell) || /\d{4}-\d{2}-\d{2}/.test(cell) || /\d{2}\/\d{2}\/\d{4}/.test(cell))
-    if (!nonSummaryRow) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    const dateCandidate = cells.find((cell) => parseDateValue(cell) !== null && !isVisualSummaryText(cell))
-    if (!dateCandidate) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    const date = parseDateValue(dateCandidate)
-    if (!date) {
-      ignored.push(`Linha ${rowIndex + 1}: ${rawText}`)
-      continue
-    }
-
-    parsed.date = date
-
-    const key = buildTransactionKey({ ...parsed, date })
-    if (seen.has(key)) {
-      continue
-    }
-
-    seen.add(key)
-    transactions.push(parsed)
-  }
-
-  if (!transactions.length) {
-    return null
-  }
-
-  const totals = transactions.reduce(
-    (accumulator, item) => {
-      if (item.type === 'income') {
-        accumulator.income += item.amount
-      } else {
-        accumulator.expense += item.amount
-      }
-      return accumulator
-    },
-    { income: 0, expense: 0 },
-  )
-
-  return { transactions, ignored, totals }
-}
-
 export function ImportSpreadsheetPage() {
   const transactions = useFinanceStore((state) => state.transactions)
   const addTransaction = useFinanceStore((state) => state.addTransaction)
@@ -420,7 +241,7 @@ export function ImportSpreadsheetPage() {
 
   const previewHeaders = useMemo(() => availableHeaders.length ? availableHeaders : [], [availableHeaders])
 
-  const hasSuspiciousAutoImport = Boolean(autoDetectedImport && autoDetectedImport.transactions.length > 0 && !autoDetectedImport.isValid)
+  const hasSuspiciousAutoImport = Boolean(autoDetectedImport && !autoDetectedImport.isValid)
 
   const handleFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -456,7 +277,7 @@ export function ImportSpreadsheetPage() {
       }
 
       const detected = detectVisualFinanceImport(workbook)
-      if (detected && detected.transactions.length > 0) {
+      if (detected) {
         setAutoDetectedImport(detected)
         setPreviewRows(rawRows.slice(0, 8))
         setColumnMap({})
@@ -528,7 +349,7 @@ export function ImportSpreadsheetPage() {
     setStatusMessage('')
 
     try {
-      if (autoDetectedImport && autoDetectedImport.transactions.length > 0) {
+      if (autoDetectedImport) {
         if (!autoDetectedImport.isValid) {
           setStatusMessage(autoDetectedImport.validationMessage ?? 'Prévia bloqueada. Corrija os dados da planilha antes de confirmar.')
           return
@@ -674,7 +495,7 @@ export function ImportSpreadsheetPage() {
           </div>
         )}
 
-        {autoDetectedImport && autoDetectedImport.transactions.length > 0 && (
+        {autoDetectedImport && (
           <div className="mt-6 space-y-5">
 <div className="grid gap-4 md:grid-cols-4">
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">

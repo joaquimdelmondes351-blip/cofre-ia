@@ -35,12 +35,13 @@ const normalizeHeader = (value: string) => value
 
 const isSummaryCell = (value: string) => {
   const normalized = normalizeHeader(value)
-  if (!normalized) {
-    return true
-  }
+  return /^(total|saldo|resumo|subtotal|cartoes|terceiros|reservas|casa|titulo|title|mes|meses|receber|pagar|a receber|a pagar|cartao)$/i.test(normalized)
+    || /\b(total|saldo|resumo|subtotal|observacao|observacoes|obs|titulo|title)\b/i.test(normalized)
+}
 
-  return /^(total|saldo|resumo|subtotal|cartoes|cartões|terceiros|reservas|casa|titulo|title|mes|mês|receber|pagar|a receber|à receber|a pagar|à pagar|cartao|cartão)$/i.test(normalized)
-    || /(total|saldo|resumo|subtotal|cartoes|cartões|terceiros|reservas|casa|titulo|title|mes|mês|cartao|cartão)/i.test(normalized)
+const isFormulaCell = (worksheet: XLSX.WorkSheet, rowIndex: number, columnIndex: number) => {
+  const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })] as XLSX.CellObject | undefined
+  return Boolean(cell?.f) || (typeof cell?.v === 'string' && cell.v.trim().startsWith('='))
 }
 
 const parseDateValue = (value: string): Date | null => {
@@ -163,81 +164,51 @@ const parseAmount = (value: string): number | null => {
   }
 }
 
-const buildCandidate = (row: string[], section: VisualImportType, sheetName: string, rowIndex: number) => {
-  const dateIndex = section === 'income' ? 0 : 7
-  const descriptionIndex = section === 'income' ? 1 : 8
-  const amountIndex = section === 'income' ? 2 : 9
+const buildCandidate = (worksheet: XLSX.WorkSheet, rows: string[][], section: VisualImportType, startColumn: number, endColumn: number, sheetName: string, rowIndex: number) => {
+  const row = rows[rowIndex] ?? []
+  const cells = row.slice(startColumn, endColumn).map((value) => String(value ?? '').trim())
+  const dateOffset = cells.findIndex((value, offset) => value && !isFormulaCell(worksheet, rowIndex, startColumn + offset) && parseDateValue(value) !== null)
 
-  const dateCell = (row[dateIndex] ?? '').trim()
-  const descriptionCell = (row[descriptionIndex] ?? '').trim()
-  const amountCell = (row[amountIndex] ?? '').trim()
-
-  if (!dateCell || !descriptionCell || !amountCell) {
-    return null
+  if (dateOffset < 0) {
+    return { candidate: null, reason: `Linha ${rowIndex + 1}: data, descrição ou valor precisam de revisão.` }
   }
 
-  if (dateCell.startsWith('=') || descriptionCell.startsWith('=') || amountCell.startsWith('=')) {
-    return null
+  const amountOffsets = cells
+    .map((value, offset) => ({ value, offset }))
+    .filter(({ value, offset }) => offset > dateOffset && value && !isFormulaCell(worksheet, rowIndex, startColumn + offset) && parseAmount(value) !== null)
+
+  const amountCell = amountOffsets[amountOffsets.length - 1]
+  if (!amountCell) {
+    return { candidate: null, reason: `Linha ${rowIndex + 1}: valor real não identificado com segurança.` }
   }
 
-  if (isSummaryCell(dateCell) || isSummaryCell(descriptionCell) || isSummaryCell(amountCell)) {
-    return null
+  const description = cells
+    .slice(dateOffset + 1, amountCell.offset)
+    .filter((value, offset) => value && !isFormulaCell(worksheet, rowIndex, startColumn + dateOffset + 1 + offset) && !isSummaryCell(value) && parseDateValue(value) === null && parseAmount(value) === null)
+    .join(' ')
+    .trim()
+
+  if (!description || isSummaryCell(description)) {
+    return { candidate: null, reason: `Linha ${rowIndex + 1}: descrição real não identificada com segurança.` }
   }
 
-  const parsedDate = parseDateValue(dateCell)
-  const parsedAmount = parseAmount(amountCell)
-  if (!parsedDate || parsedAmount === null) {
-    return null
-  }
-
-  return {
-    name: descriptionCell,
-    category: 'Outros',
-    amount: Math.abs(parsedAmount),
-    type: section,
-    date: parsedDate,
-    sourceSheet: sheetName,
-    sourceRow: rowIndex + 1,
-  }
-}
-
-const buildValidation = (transactions: VisualTransaction[]) => {
-  if (!transactions.length) {
-    return {
-      isValid: false,
-      validationMessage: 'Nenhum lançamento real foi encontrado na planilha.',
-    }
-  }
-
-  const repeats = new Map<number, number>()
-  for (const transaction of transactions) {
-    const key = Math.round(Math.abs(transaction.amount) * 100)
-    repeats.set(key, (repeats.get(key) ?? 0) + 1)
-  }
-
-  const duplicateAmounts = [...repeats.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([amount]) => `R$ ${(amount / 100).toFixed(2).replace('.', ',')}`)
-
-  if (duplicateAmounts.length > 0) {
-    return {
-      isValid: false,
-      validationMessage: `Prévia bloqueada: valores repetidos detectados (${duplicateAmounts.join(', ')}).`,
-    }
-  }
-
-  const previewTotal = transactions.reduce((sum, transaction) => sum + transaction.amount, 0)
-  const maxAmount = Math.max(...transactions.map((transaction) => transaction.amount))
-  if (transactions.length > 1 && previewTotal > 0 && maxAmount > 0 && previewTotal > maxAmount * transactions.length * 1.5) {
-    return {
-      isValid: false,
-      validationMessage: 'Prévia bloqueada: o total da visualização ficou muito acima dos lançamentos individuais.',
-    }
+  const date = parseDateValue(cells[dateOffset])
+  const amount = parseAmount(amountCell.value)
+  if (!date || amount === null || amount <= 0) {
+    return { candidate: null, reason: `Linha ${rowIndex + 1}: data ou valor precisam de revisão.` }
   }
 
   return {
-    isValid: true,
-    validationMessage: 'Prévia validada.',
+    candidate: {
+      name: description,
+      category: 'Outros',
+      amount: Math.abs(amount),
+      type: section,
+      date,
+      sourceSheet: sheetName,
+      sourceRow: rowIndex + 1,
+    },
+    reason: null,
   }
 }
 
@@ -249,34 +220,59 @@ export const detectVisualFinanceImport = (worksheetOrWorkbook: XLSX.WorkSheet | 
   let bestResult: AutoDetectedImportSummary | null = null
 
   for (const { name, sheet } of sheets) {
-    const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: '' }) as string[][]
+    const worksheet = sheet as XLSX.WorkSheet
+    const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, raw: false, defval: '' }) as string[][]
     if (!rows.length) {
       continue
     }
 
     const transactions: VisualTransaction[] = []
     const ignored: string[] = []
+    const sectionStarts = rows
+      .flatMap((row, rowIndex) => row.map((value, columnIndex) => ({ value: String(value ?? '').trim(), rowIndex, columnIndex })))
+      .filter(({ value }) => /^(a receber|a pagar)$/i.test(normalizeHeader(value)))
+      .reduce((sections, item) => {
+        const type = normalizeHeader(item.value) === 'a receber' ? 'income' : 'expense'
+        if (!sections.some((section) => section.type === type)) {
+          sections.push({ type, columnIndex: item.columnIndex, headerRow: item.rowIndex })
+        }
+        return sections
+      }, [] as Array<{ type: VisualImportType; columnIndex: number; headerRow: number }>)
 
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex] ?? []
-      const rawText = row.join(' ').trim()
-      if (!rawText) {
-        continue
+    if (!sectionStarts.length) {
+      continue
+    }
+
+    const sortedSections = [...sectionStarts].sort((left, right) => left.columnIndex - right.columnIndex)
+    for (const section of sortedSections) {
+      const nextSection = sortedSections.find((candidate) => candidate.columnIndex > section.columnIndex)
+      const endColumn = nextSection?.columnIndex ?? Math.max(...rows.map((row) => row.length), section.columnIndex + 1)
+      const seenAmounts = new Set<number>()
+
+      for (let rowIndex = section.headerRow + 1; rowIndex < rows.length; rowIndex += 1) {
+        const row = rows[rowIndex] ?? []
+        const blockText = row.slice(section.columnIndex, endColumn).join(' ').trim()
+        if (!blockText || isSummaryCell(blockText)) {
+          continue
+        }
+
+        const result = buildCandidate(worksheet, rows, section.type, section.columnIndex, endColumn, name, rowIndex)
+        if (!result.candidate) {
+          if (result.reason && row.some((value) => String(value ?? '').trim())) {
+            ignored.push(result.reason)
+          }
+          continue
+        }
+
+        const amountKey = Math.round(result.candidate.amount * 100)
+        if (seenAmounts.has(amountKey)) {
+          ignored.push(`Linha ${rowIndex + 1}: valor repetido ignorado (${result.candidate.amount.toFixed(2).replace('.', ',')}).`)
+          continue
+        }
+
+        seenAmounts.add(amountKey)
+        transactions.push(result.candidate)
       }
-
-      if (isSummaryCell(rawText)) {
-        continue
-      }
-
-      const incomeCandidate = buildCandidate(row, 'income', name, rowIndex)
-      const expenseCandidate = buildCandidate(row, 'expense', name, rowIndex)
-      const candidate = incomeCandidate ?? expenseCandidate
-
-      if (!candidate) {
-        continue
-      }
-
-      transactions.push(candidate)
     }
 
     if (!transactions.length) {
@@ -296,15 +292,17 @@ export const detectVisualFinanceImport = (worksheetOrWorkbook: XLSX.WorkSheet | 
     )
 
     const previewTotal = totals.income + totals.expense
-    const validation = buildValidation(transactions)
+    const validationMessage = transactions.length
+      ? 'Prévia validada. Linhas sem data, descrição ou valor foram bloqueadas para revisão.'
+      : 'Prévia bloqueada: nenhum lançamento seguro foi identificado. Revise as linhas indicadas.'
 
     const candidateResult: AutoDetectedImportSummary = {
       transactions,
       ignored,
       totals,
       previewTotal,
-      isValid: validation.isValid,
-      validationMessage: validation.validationMessage,
+      isValid: transactions.length > 0,
+      validationMessage,
     }
 
     if (!bestResult || candidateResult.transactions.length > bestResult.transactions.length) {

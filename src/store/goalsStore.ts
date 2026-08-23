@@ -21,11 +21,14 @@ type GoalsState = {
 }
 
 let goalsUnsubscribe: Unsubscribe | null = null
+let goalsSubscriptionId = 0
 
 export const useGoalsStore = create<GoalsState>((set) => ({
   goals: [],
   loading: false,
   subscribeToUserGoals: (uid) => {
+    const currentSubscriptionId = ++goalsSubscriptionId
+
     if (goalsUnsubscribe) {
       goalsUnsubscribe()
       goalsUnsubscribe = null
@@ -36,13 +39,17 @@ export const useGoalsStore = create<GoalsState>((set) => ({
       return () => undefined
     }
 
-    set({ loading: true })
+    set({ goals: [], loading: true })
 
     const q = query(collection(db, 'users', uid, 'goals'), orderBy('createdAt', 'desc'))
 
     goalsUnsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        if (currentSubscriptionId !== goalsSubscriptionId) {
+          return
+        }
+
         const goals = snapshot.docs.map((document) => {
           const data = document.data() as {
             name: string
@@ -63,6 +70,10 @@ export const useGoalsStore = create<GoalsState>((set) => ({
         set({ goals, loading: false })
       },
       () => {
+        if (currentSubscriptionId !== goalsSubscriptionId) {
+          return
+        }
+
         set({ goals: [], loading: false })
       },
     )

@@ -17,7 +17,11 @@ interface AppProvidersProps {
  */
 export function AppProviders({ children }: AppProvidersProps) {
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    let authChangeId = 0
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const currentAuthChangeId = ++authChangeId
+
       if (!firebaseUser) {
         useAuthStore.getState().clear()
         useFinanceStore.getState().subscribeToUserTransactions(null)
@@ -26,9 +30,21 @@ export function AppProviders({ children }: AppProvidersProps) {
         return
       }
 
+      useAuthStore.getState().clear()
+      useFinanceStore.getState().subscribeToUserTransactions(null)
+      useCardsStore.getState().subscribeToUserCards(null)
+      useGoalsStore.getState().subscribeToUserGoals(null)
+
+      const emailPrefix = firebaseUser.email?.split('@')[0]?.trim() || 'Usuário'
+      const resolvedName = firebaseUser.displayName?.trim() || emailPrefix
+
+      if (currentAuthChangeId !== authChangeId || auth.currentUser?.uid !== firebaseUser.uid) {
+        return
+      }
+
       const user = {
         id: firebaseUser.uid,
-        name: firebaseUser.displayName ?? firebaseUser.email?.split('@')[0] ?? 'Usuário',
+        name: resolvedName,
         email: firebaseUser.email ?? '',
         createdAt: new Date(),
       }
@@ -39,7 +55,14 @@ export function AppProviders({ children }: AppProvidersProps) {
       useGoalsStore.getState().subscribeToUserGoals(firebaseUser.uid)
     })
 
-    return () => unsubscribe()
+    return () => {
+      authChangeId += 1
+      unsubscribe()
+      useAuthStore.getState().clear()
+      useFinanceStore.getState().subscribeToUserTransactions(null)
+      useCardsStore.getState().subscribeToUserCards(null)
+      useGoalsStore.getState().subscribeToUserGoals(null)
+    }
   }, [])
 
   return <BrowserRouter>{children}</BrowserRouter>

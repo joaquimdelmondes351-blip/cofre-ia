@@ -14,8 +14,8 @@ export class AuthRepository implements IAuthRepository {
     return this.mapToUser(firebaseUser)
   }
 
-  async signup(email: string, password: string): Promise<User> {
-    const firebaseUser = await this.datasource.signUp(email, password)
+  async signup(email: string, password: string, name = ''): Promise<User> {
+    const firebaseUser = await this.datasource.signUp(email, password, name)
     return this.mapToUser(firebaseUser)
   }
 
@@ -25,13 +25,20 @@ export class AuthRepository implements IAuthRepository {
 
   async getCurrentUser(): Promise<User | null> {
     const firebaseUser = await this.datasource.getCurrentFirebaseUser()
-    return firebaseUser ? this.mapToUser(firebaseUser) : null
+    if (!firebaseUser) {
+      return null
+    }
+
+    return this.mapToUser(firebaseUser)
   }
 
   private mapToUser(firebaseUser: { uid: string; displayName: string | null; email: string | null }): User {
+    const fallbackEmailName = firebaseUser.email?.split('@')[0]?.trim() || 'Usuário'
+    const resolvedName = firebaseUser.displayName?.trim() || fallbackEmailName
+
     return {
       id: firebaseUser.uid,
-      name: firebaseUser.displayName ?? '',
+      name: resolvedName,
       email: firebaseUser.email ?? '',
       createdAt: new Date(),
     }

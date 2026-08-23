@@ -54,11 +54,14 @@ const formatDate = (value: Date | number | null | undefined) => {
 }
 
 let transactionsUnsubscribe: Unsubscribe | null = null
+let transactionsSubscriptionId = 0
 
 export const useFinanceStore = create<FinanceState>((set) => ({
   transactions: [],
   loading: false,
   subscribeToUserTransactions: (uid) => {
+    const currentSubscriptionId = ++transactionsSubscriptionId
+
     if (transactionsUnsubscribe) {
       transactionsUnsubscribe()
       transactionsUnsubscribe = null
@@ -69,13 +72,17 @@ export const useFinanceStore = create<FinanceState>((set) => ({
       return () => undefined
     }
 
-    set({ loading: true })
+    set({ transactions: [], loading: true })
 
     const q = query(collection(db, 'users', uid, 'transactions'), orderBy('createdAt', 'desc'))
 
     transactionsUnsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        if (currentSubscriptionId !== transactionsSubscriptionId) {
+          return
+        }
+
         const transactions = snapshot.docs.map((document) => {
           const data = document.data() as {
             name: string
@@ -126,6 +133,10 @@ export const useFinanceStore = create<FinanceState>((set) => ({
         set({ transactions, loading: false })
       },
       (error) => {
+        if (currentSubscriptionId !== transactionsSubscriptionId) {
+          return
+        }
+
         console.error('Erro ao carregar transações do Firestore:', error)
         set({ transactions: [], loading: false })
       },
